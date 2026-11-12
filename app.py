@@ -1,3 +1,4 @@
+import html
 import numpy as np
 import pandas as pd
 import altair as alt
@@ -64,6 +65,11 @@ with st.sidebar:
     st.header("🎀 Pengaturan")
     nama_tema = st.selectbox("Tema warna 🎨", list(THEMES.keys()))
     gerak = st.toggle("Efek gerak ✨", value=True)
+    with st.expander("🏪 Identitas UMKM", expanded=True):
+        nama_umkm = st.text_input("Nama UMKM", value="Imupss")
+        jenis_usaha = st.text_input("Jenis usaha", value="Toko kue")
+        produk = st.text_input("Produk yang dijual", value="Aneka kue")
+        periode = st.text_input("Periode data", value="", placeholder="contoh: Januari–Juni 2026")
     st.divider()
     sumber = st.radio("Sumber data", ["Data contoh", "Ketik manual", "Unggah CSV sendiri"])
     file = None
@@ -74,6 +80,21 @@ with st.sidebar:
     st.caption("Metode utama: Regresi Linear (scikit-learn) 💕")
 
 T = THEMES[nama_tema]
+
+h = html.escape
+nama_tampil = nama_umkm.strip() or "UMKM"
+bagian_identitas = [jenis_usaha.strip()]
+if produk.strip():
+    bagian_identitas.append(f"Produk: {produk.strip()}")
+if periode.strip():
+    bagian_identitas.append(f"Periode: {periode.strip()}")
+identitas = " • ".join(h(x) for x in bagian_identitas if x)
+konteks = ""
+if jenis_usaha.strip() or produk.strip():
+    isi_konteks = ", ".join(
+        x for x in [jenis_usaha.strip(), f"produk: {produk.strip()}" if produk.strip() else ""] if x
+    )
+    konteks = f" ({isi_konteks})"
 
 
 def hex_rgb(h):
@@ -295,7 +316,8 @@ st.markdown(
         <span class="kilau" style="top:62px;right:130px;animation-delay:.8s">💖</span>
         <span class="kilau" style="top:20px;right:230px;animation-delay:1.2s">🌸</span>
         <span class="kilau" style="top:70px;right:330px;animation-delay:1.6s">⭐</span>
-        <h1><span class="maskot">{T['maskot']}</span>Prediksi Penjualan UMKM</h1>
+        <h1><span class="maskot">{T['maskot']}</span>Prediksi Penjualan {h(nama_tampil)}</h1>
+        <p style="font-weight:800">🏪 {identitas}</p>
         <p>Intip omzet bulan depan dengan cepat dan lucu! 🎀 Lengkap dengan kisaran, skenario,
         target, estimasi laba, dan laporan siap unduh.</p>
         <div class="ombak"></div><div class="ombak dua"></div>
@@ -325,6 +347,10 @@ elif sumber == "Ketik manual":
     df = st.data_editor(DATA_CONTOH, num_rows="dynamic", hide_index=True, key="editor_manual")
 else:
     df = DATA_CONTOH.copy()
+    st.caption(
+        "ℹ️ Saat ini memakai **data contoh**. Ganti dengan data penjualan asli lewat menu "
+        "'Ketik manual' atau 'Unggah CSV sendiri' di sidebar."
+    )
 
 if "Bulan_Ke" not in df.columns or "Total_Penjualan" not in df.columns:
     st.error("Kolom tidak sesuai. Pastikan ada kolom 'Bulan_Ke' dan 'Total_Penjualan'.")
@@ -424,7 +450,7 @@ r2_persen = max(r2, 0) * 100
 
 def buat_kesimpulan():
     return (
-        f"Berdasarkan data penjualan {len(df)} bulan (bulan ke-{bulan_pertama} sampai ke-{bulan_terakhir}), "
+        f"Berdasarkan data penjualan {nama_tampil}{konteks} selama {len(df)} bulan (bulan ke-{bulan_pertama} sampai ke-{bulan_terakhir}), "
         f"penjualan cenderung {arah_k} rata-rata sekitar {rp(abs(kenaikan))} per bulan "
         f"({abs(persen):.1f}% dari penjualan terakhir sebesar {rp(terakhir)}).\n\n"
         f"Model regresi linear yang dihasilkan adalah: Penjualan = {rp(awal)} "
@@ -802,12 +828,12 @@ with tab5:
 
     data_laporan = df.rename(columns={"Bulan_Ke": "Bulan ke-", "Total_Penjualan": "Total Penjualan"}).copy()
     data_laporan["Total Penjualan"] = data_laporan["Total Penjualan"].map(rp)
-    paragraf = "".join(f"<p>{p}</p>" for p in kesimpulan.split("\n\n"))
+    paragraf = "".join(f"<p>{h(p)}</p>" for p in kesimpulan.split("\n\n"))
     html_laporan = (
         "<!DOCTYPE html><html lang='id'><head><meta charset='utf-8'>"
         "<title>Laporan Prediksi Penjualan</title><style>" + GAYA + "</style></head><body>"
-        "<h1>Laporan Prediksi Penjualan UMKM</h1>"
-        "<p class='sub'>Dibuat otomatis dengan Regresi Linear (scikit-learn)</p>"
+        "<h1>Laporan Prediksi Penjualan " + h(nama_tampil) + "</h1>"
+        "<p class='sub'>" + identitas + " &nbsp;|&nbsp; Regresi Linear (scikit-learn)</p>"
         "<h2>1. Data penjualan</h2>" + data_laporan.to_html(index=False, border=0)
         + "<h2>2. Model</h2><div class='box'>Penjualan = " + rp(awal) + (" + " if kenaikan >= 0 else " - ")
         + rp(abs(kenaikan)) + " x Bulan ke-</div>"
