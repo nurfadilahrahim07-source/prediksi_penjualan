@@ -58,6 +58,25 @@ DATA_CONTOH = pd.DataFrame(
     }
 )
 
+DATA_UNIT = pd.DataFrame(
+    {
+        "Bulan_Ke": [1, 2, 3, 4, 5, 6],
+        "Brownies": [168, 192, 192, 216, 242, 268],
+        "Bolu": [132, 138, 134, 144, 156, 160],
+        "Donat": [600, 660, 610, 680, 700, 760],
+        "Kue kering": [45, 50, 45, 54, 58, 59],
+        "Cupcake": [225, 245, 255, 290, 315, 355],
+    }
+)
+DATA_HARGA = pd.DataFrame(
+    {
+        "Produk": ["Brownies", "Bolu", "Donat", "Kue kering", "Cupcake"],
+        "Satuan": ["box", "box", "pcs", "toples", "pcs"],
+        "Harga jual": [25000, 25000, 5000, 50000, 10000],
+        "Modal per satuan": [15000, 15000, 2500, 30000, 5500],
+    }
+)
+
 # ---------------------------------------------------------------
 # Sidebar (dibuat paling awal supaya tema bisa dipakai di CSS)
 # ---------------------------------------------------------------
@@ -68,10 +87,12 @@ with st.sidebar:
     with st.expander("🏪 Identitas UMKM", expanded=True):
         nama_umkm = st.text_input("Nama UMKM", value="Imupss")
         jenis_usaha = st.text_input("Jenis usaha", value="Toko kue")
-        produk = st.text_input("Produk yang dijual", value="Aneka kue")
+        produk = st.text_input(
+            "Produk yang dijual", value="Brownies, bolu, donat, kue kering, cupcake"
+        )
         periode = st.text_input("Periode data", value="", placeholder="contoh: Januari–Juni 2026")
     st.divider()
-    sumber = st.radio("Sumber data", ["Data contoh", "Ketik manual", "Unggah CSV sendiri"])
+    sumber = st.radio("Sumber data", ["Data contoh", "Dari rincian produk", "Ketik manual", "Unggah CSV sendiri"])
     file = None
     if sumber == "Unggah CSV sendiri":
         file = st.file_uploader("Kolom wajib: Bulan_Ke, Total_Penjualan", type=["csv"])
@@ -263,6 +284,57 @@ def rp(x):
     return "Rp " + f"{x:,.0f}".replace(",", ".")
 
 
+def unit_txt(v):
+    return f"{v:,.0f}".replace(",", ".")
+
+
+def siapkan_produk(unit_df, harga_df):
+    """Rapikan tabel produk. Hasil: (tabel unit, info harga, daftar produk, pesan)."""
+    pesan = []
+    tp_ = unit_df.copy()
+    tp_.columns = [str(c).strip() for c in tp_.columns]
+    if "Bulan_Ke" not in tp_.columns or tp_.shape[1] < 2:
+        return None, None, [], ["Tabel jumlah terjual harus punya kolom Bulan_Ke dan minimal satu kolom produk."]
+    kolom_ = [c for c in tp_.columns if c != "Bulan_Ke"]
+    tp_["Bulan_Ke"] = pd.to_numeric(tp_["Bulan_Ke"], errors="coerce")
+    for c in kolom_:
+        tp_[c] = pd.to_numeric(tp_[c], errors="coerce")
+    tp_ = tp_.dropna(subset=["Bulan_Ke"]).drop_duplicates("Bulan_Ke", keep="last").sort_values("Bulan_Ke")
+    tp_[kolom_] = tp_[kolom_].fillna(0)
+    kolom_ = [c for c in kolom_ if tp_[c].sum() > 0]
+    if len(tp_) < 2 or not kolom_:
+        return None, None, [], ["Isi minimal 2 bulan dan satu produk dengan jumlah terjual."]
+    tp_["Bulan_Ke"] = tp_["Bulan_Ke"].astype(int)
+
+    hd = harga_df.copy()
+    hd.columns = [str(c).strip() for c in hd.columns]
+    for nama_k, bawaan in [("Produk", ""), ("Satuan", "pcs"), ("Harga jual", 0), ("Modal per satuan", 0)]:
+        if nama_k not in hd.columns:
+            hd[nama_k] = bawaan
+    hd["Produk"] = hd["Produk"].astype(str).str.strip()
+    hd["Satuan"] = hd["Satuan"].fillna("pcs").astype(str)
+    hd["Harga jual"] = pd.to_numeric(hd["Harga jual"], errors="coerce").fillna(0)
+    hd["Modal per satuan"] = pd.to_numeric(hd["Modal per satuan"], errors="coerce").fillna(0)
+    hd["kunci"] = hd["Produk"].str.lower()
+    hd = hd.drop_duplicates("kunci", keep="last").set_index("kunci")
+
+    baris_, tanpa_ = [], []
+    for c in kolom_:
+        k = c.lower()
+        if k in hd.index:
+            r = hd.loc[k]
+            baris_.append({"Produk": c, "Satuan": r["Satuan"], "Harga": float(r["Harga jual"]), "Modal": float(r["Modal per satuan"])})
+        else:
+            tanpa_.append(c)
+            baris_.append({"Produk": c, "Satuan": "pcs", "Harga": 0.0, "Modal": 0.0})
+    if tanpa_:
+        pesan.append(
+            "Harga belum diisi untuk: " + ", ".join(tanpa_)
+            + ". Tambahkan barisnya di tabel harga (namanya harus sama dengan nama kolom produk)."
+        )
+    return tp_, pd.DataFrame(baris_).set_index("Produk"), kolom_, pesan
+
+
 def teks_jt(v):
     return "Rp " + f"{v / 1e6:.2f}".replace(".", ",") + " jt"
 
@@ -334,26 +406,68 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------
+# Wadah, tab, dan isian data produk
+# ---------------------------------------------------------------
+wadah_kartu = st.container()
+
+tab1, tab2, tab_produk, tab3, tab4, tab5, tab6 = st.tabs(
+    ["📊 Grafik", "🔮 Prediksi", "🍰 Produk", "🧪 Skenario & Simulasi", "⚖️ Bandingkan Model", "📝 Laporan", "📋 Data"]
+)
+
+with tab_produk:
+    st.subheader(f"Penjualan per produk {nama_tampil} 🍰")
+    st.caption(
+        "Nama produk, harga, modal, dan jumlah terjual di bawah masih **contoh**. "
+        "Ganti dengan data asli, atau unggah CSV jumlah terjual (kolom Bulan_Ke lalu satu kolom per produk)."
+    )
+    with st.expander("✏️ Isi harga, modal, dan jumlah terjual", expanded=True):
+        up_produk = st.file_uploader("Unggah CSV jumlah terjual (opsional)", type=["csv"], key="csv_produk")
+        st.markdown("**1. Daftar harga** (klik baris kosong paling bawah untuk menambah produk)")
+        harga_df = st.data_editor(DATA_HARGA, num_rows="dynamic", hide_index=True, key="editor_harga")
+        st.markdown("**2. Jumlah terjual tiap bulan** (satu kolom untuk tiap produk)")
+        if up_produk is not None:
+            sumber_unit, kunci_unit = pd.read_csv(up_produk), "editor_unit_csv"
+        else:
+            sumber_unit, kunci_unit = DATA_UNIT, "editor_unit"
+        unit_df = st.data_editor(sumber_unit, num_rows="dynamic", hide_index=True, key=kunci_unit)
+
+tp, info_harga, kolom_produk, pesan_produk = siapkan_produk(unit_df, harga_df)
+ok_produk = tp is not None
+
+# ---------------------------------------------------------------
 # Ambil data
 # ---------------------------------------------------------------
-if sumber == "Unggah CSV sendiri":
+if sumber == "Dari rincian produk":
+    if not ok_produk:
+        with wadah_kartu:
+            st.error("Isi dulu tabel di tab 🍰 Produk (minimal 2 bulan dan 1 produk dengan jumlah terjual).")
+        st.stop()
+    omzet_awal = tp[kolom_produk].mul(info_harga["Harga"])
+    df = pd.DataFrame(
+        {"Bulan_Ke": tp["Bulan_Ke"].to_numpy(), "Total_Penjualan": omzet_awal.sum(axis=1).to_numpy()}
+    )
+elif sumber == "Unggah CSV sendiri":
     if file is None:
-        st.info("⬅️ Unggah file CSV di sidebar, atau pilih **Data contoh** ya! 🌸")
+        with wadah_kartu:
+            st.info("⬅️ Unggah file CSV di sidebar, atau pilih **Data contoh** ya! 🌸")
         st.stop()
     df = pd.read_csv(file)
 elif sumber == "Ketik manual":
-    st.subheader("✍️ Ketik data penjualan Anda")
-    st.caption("Klik sel untuk mengubah angka. Klik baris kosong paling bawah untuk menambah bulan baru.")
-    df = st.data_editor(DATA_CONTOH, num_rows="dynamic", hide_index=True, key="editor_manual")
+    with wadah_kartu:
+        st.subheader("✍️ Ketik data penjualan Anda")
+        st.caption("Klik sel untuk mengubah angka. Klik baris kosong paling bawah untuk menambah bulan baru.")
+        df = st.data_editor(DATA_CONTOH, num_rows="dynamic", hide_index=True, key="editor_manual")
 else:
     df = DATA_CONTOH.copy()
-    st.caption(
-        "ℹ️ Saat ini memakai **data contoh**. Ganti dengan data penjualan asli lewat menu "
-        "'Ketik manual' atau 'Unggah CSV sendiri' di sidebar."
-    )
+    with wadah_kartu:
+        st.caption(
+            "ℹ️ Saat ini memakai **data contoh**. Ganti dengan data penjualan asli lewat menu "
+            "'Ketik manual', 'Unggah CSV sendiri', atau 'Dari rincian produk' di sidebar."
+        )
 
 if "Bulan_Ke" not in df.columns or "Total_Penjualan" not in df.columns:
-    st.error("Kolom tidak sesuai. Pastikan ada kolom 'Bulan_Ke' dan 'Total_Penjualan'.")
+    with wadah_kartu:
+        st.error("Kolom tidak sesuai. Pastikan ada kolom 'Bulan_Ke' dan 'Total_Penjualan'.")
     st.stop()
 
 df = df[["Bulan_Ke", "Total_Penjualan"]].copy()
@@ -362,7 +476,8 @@ df["Total_Penjualan"] = pd.to_numeric(df["Total_Penjualan"], errors="coerce")
 df = df.dropna().drop_duplicates("Bulan_Ke", keep="last").sort_values("Bulan_Ke")
 df["Bulan_Ke"] = df["Bulan_Ke"].astype(int)
 if len(df) < 2:
-    st.error("Data minimal 2 bulan (angka valid) supaya bisa diprediksi.")
+    with wadah_kartu:
+        st.error("Data minimal 2 bulan (angka valid) supaya bisa diprediksi.")
     st.stop()
 
 # ---------------------------------------------------------------
@@ -448,6 +563,63 @@ arah_k = "naik" if kenaikan >= 0 else "turun"
 r2_persen = max(r2, 0) * 100
 
 
+# ---------------------------------------------------------------
+# Analisis per produk (harga, modal, jumlah terjual)
+# ---------------------------------------------------------------
+ringkas_p = None
+teks_produk = ""
+if ok_produk:
+    harga_s, modal_s = info_harga["Harga"], info_harga["Modal"]
+    omzet_p = tp[kolom_produk].mul(harga_s)
+    laba_p = tp[kolom_produk].mul(harga_s - modal_s)
+    bulan_akhir_p = int(tp["Bulan_Ke"].max())
+    bulan_pred_p = np.arange(bulan_akhir_p + 1, bulan_akhir_p + n_bulan + 1)
+    unit_pred, baris_p = {}, []
+    for c in kolom_produk:
+        m_p = LinearRegression().fit(tp[["Bulan_Ke"]], tp[c])
+        up = np.maximum(m_p.predict(pd.DataFrame({"Bulan_Ke": bulan_pred_p})), 0)
+        unit_pred[c] = up
+        akhir_p = float(tp[c].iloc[-1])
+        lereng = float(m_p.coef_[0])
+        hj, mo = float(harga_s[c]), float(modal_s[c])
+        baris_p.append(
+            {
+                "Produk": c,
+                "Satuan": info_harga.loc[c, "Satuan"],
+                "Harga jual": hj,
+                "Modal": mo,
+                "Laba per satuan": hj - mo,
+                "Margin (%)": (hj - mo) / hj * 100 if hj else 0.0,
+                "Unit terjual": float(tp[c].sum()),
+                "Omzet": float(omzet_p[c].sum()),
+                "Laba": float(laba_p[c].sum()),
+                "Tren (%)": lereng / akhir_p * 100 if akhir_p else 0.0,
+                "Prediksi unit": float(up[0]),
+                "Saran produksi": float(np.ceil(up[0] * 1.1)),
+                "Omzet depan": float(up[0] * hj),
+                "Laba depan": float(up[0] * (hj - mo)),
+                "Omzet total pred": float(up.sum() * hj),
+                "Laba total pred": float(up.sum() * (hj - mo)),
+            }
+        )
+    ringkas_p = pd.DataFrame(baris_p)
+    total_omzet_p = float(ringkas_p["Omzet"].sum())
+    total_laba_p = float(ringkas_p["Laba"].sum())
+    margin_p = total_laba_p / total_omzet_p * 100 if total_omzet_p else 0.0
+    ringkas_p["Porsi omzet (%)"] = ringkas_p["Omzet"] / total_omzet_p * 100 if total_omzet_p else 0.0
+    ter_unit = ringkas_p.sort_values("Omzet", ascending=False).iloc[0]
+    ter_laba = ringkas_p.sort_values("Laba", ascending=False).iloc[0]
+    tercepat = ringkas_p.sort_values("Tren (%)", ascending=False).iloc[0]
+    teks_produk = (
+        f"Rincian produk: {len(kolom_produk)} produk terjual dengan total omzet {rp(total_omzet_p)} "
+        f"dan laba kotor {rp(total_laba_p)} (margin {margin_p:.0f}%) pada periode data. "
+        f"Produk dengan omzet terbesar adalah {ter_unit['Produk']} dan yang paling menguntungkan adalah {ter_laba['Produk']}. "
+        f"Perkiraan omzet {n_bulan} bulan ke depan dari semua produk sebesar "
+        f"{rp(float(ringkas_p['Omzet total pred'].sum()))} dengan laba kotor "
+        f"{rp(float(ringkas_p['Laba total pred'].sum()))}.\n\n"
+    )
+
+
 def buat_kesimpulan():
     return (
         f"Berdasarkan data penjualan {nama_tampil}{konteks} selama {len(df)} bulan (bulan ke-{bulan_pertama} sampai ke-{bulan_terakhir}), "
@@ -461,7 +633,8 @@ def buat_kesimpulan():
         f"(kisaran {rp(float(pred['Bawah'].iloc[0]))} sampai {rp(float(pred['Atas'].iloc[0]))}). "
         f"Untuk {n_bulan} bulan ke depan, total penjualan diperkirakan {rp(total_pred)} "
         f"dengan rata-rata {rp(rata_pred)} per bulan; puncaknya di {label_bulan(bulan_puncak)} sebesar {rp(nilai_puncak)}.\n\n"
-        f"Keterbatasan: jumlah data hanya {len(df)} bulan dan model belum memperhitungkan faktor musiman "
+        + teks_produk
+        + f"Keterbatasan: jumlah data hanya {len(df)} bulan dan model belum memperhitungkan faktor musiman "
         f"(misalnya Lebaran atau promo), sehingga hasilnya sebaiknya dipakai sebagai perkiraan kasar."
     )
 
@@ -471,24 +644,21 @@ kesimpulan = buat_kesimpulan()
 # ---------------------------------------------------------------
 # Kartu ringkasan
 # ---------------------------------------------------------------
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    kartu(0, "💰", "Penjualan terakhir", terakhir, f"{rp(terakhir)} (bulan ke-{bulan_terakhir})", 0.0)
-with c2:
-    kartu(1, "📈", "Tren per bulan", abs(kenaikan), f"{rp(abs(kenaikan))} {arah_k} tiap bulan", 0.15)
-with c3:
-    kartu(2, "🎯", "Akurasi model (R²)", r2, "Mendekati 1 = makin cocok", 0.30, juta=False)
-with c4:
-    kartu(3, "🔮", "Prediksi bulan depan", bulan_depan, f"{rp(bulan_depan)} ({label_bulan(bulan_terakhir + 1)})", 0.45)
-
-st.write("")
+with wadah_kartu:
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kartu(0, "💰", "Penjualan terakhir", terakhir, f"{rp(terakhir)} (bulan ke-{bulan_terakhir})", 0.0)
+    with c2:
+        kartu(1, "📈", "Tren per bulan", abs(kenaikan), f"{rp(abs(kenaikan))} {arah_k} tiap bulan", 0.15)
+    with c3:
+        kartu(2, "🎯", "Akurasi model (R²)", r2, "Mendekati 1 = makin cocok", 0.30, juta=False)
+    with c4:
+        kartu(3, "🔮", "Prediksi bulan depan", bulan_depan, f"{rp(bulan_depan)} ({label_bulan(bulan_terakhir + 1)})", 0.45)
+    st.write("")
 
 # ---------------------------------------------------------------
 # Tab
 # ---------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["📊 Grafik", "🔮 Prediksi", "🧪 Skenario & Simulasi", "⚖️ Bandingkan Model", "📝 Laporan", "📋 Data"]
-)
 
 domain_jenis = ["Aktual", "Prediksi"]
 range_jenis = [T["p1"], T["p3"]]
@@ -652,6 +822,179 @@ with tab2:
 - Model ini belum memperhitungkan musim ramai (Lebaran, promo) dan data yang sedikit
   membuat perkiraan kurang pasti.
             """
+        )
+
+# ====================== TAB PRODUK (HASIL) ======================
+with tab_produk:
+    for ps in pesan_produk:
+        st.warning(ps)
+    if ok_produk:
+        if sumber == "Dari rincian produk":
+            st.success("✅ Prediksi total di tab lain memakai jumlah omzet semua produk di sini.")
+        else:
+            st.caption(
+                "Tip: pilih sumber data 'Dari rincian produk' di sidebar supaya prediksi total "
+                "memakai omzet semua produk ini."
+            )
+        warna_dasar = [T["p1"], T["p3"], T["p2"], T["p4"], "#fbbf24", "#34d399", "#60a5fa", "#f87171"]
+        warna_produk = [warna_dasar[i % len(warna_dasar)] for i in range(len(kolom_produk))]
+        skala_p = alt.Scale(domain=kolom_produk, range=warna_produk)
+
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("Total omzet", rp(total_omzet_p))
+        a2.metric("Total laba kotor", rp(total_laba_p))
+        a3.metric("Margin laba", f"{margin_p:.0f}%")
+        a4.metric("Total unit terjual", unit_txt(float(ringkas_p["Unit terjual"].sum())))
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Omzet terbesar 🏆", str(ter_unit["Produk"]), f"{ter_unit['Porsi omzet (%)']:.0f}% dari total omzet", delta_color="off")
+        b2.metric("Paling untung 💰", str(ter_laba["Produk"]), rp(ter_laba["Laba"]), delta_color="off")
+        b3.metric("Tumbuh tercepat 🚀", str(tercepat["Produk"]), f"{tercepat['Tren (%)']:+.1f}% per bulan", delta_color="off")
+
+        st.subheader("Daftar harga & margin 🏷️")
+        t_harga = ringkas_p[["Produk", "Satuan", "Harga jual", "Modal", "Laba per satuan", "Margin (%)"]].copy()
+        for kol in ["Harga jual", "Modal", "Laba per satuan"]:
+            t_harga[kol] = t_harga[kol].map(rp)
+        t_harga["Margin (%)"] = t_harga["Margin (%)"].map(lambda v: f"{v:.0f}%")
+        st.dataframe(t_harga, hide_index=True)
+
+        st.subheader("Rekap penjualan 🧾")
+        rekap = ringkas_p[["Produk", "Satuan", "Unit terjual", "Omzet", "Laba", "Porsi omzet (%)"]].sort_values("Omzet", ascending=False)
+        rekap_tampil = rekap.copy()
+        rekap_tampil["Unit terjual"] = rekap_tampil["Unit terjual"].map(unit_txt)
+        rekap_tampil["Omzet"] = rekap_tampil["Omzet"].map(rp)
+        rekap_tampil["Laba"] = rekap_tampil["Laba"].map(rp)
+        rekap_tampil["Porsi omzet (%)"] = rekap_tampil["Porsi omzet (%)"].map(lambda v: f"{v:.1f}%")
+        st.dataframe(rekap_tampil, hide_index=True)
+
+        st.subheader("Omzet tiap bulan per produk 📊")
+        omzet_panjang = omzet_p.assign(Bulan_Ke=tp["Bulan_Ke"].to_numpy()).melt(
+            id_vars="Bulan_Ke", var_name="Produk", value_name="Omzet"
+        )
+        tumpuk = (
+            alt.Chart(omzet_panjang)
+            .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+            .encode(
+                x=alt.X("Bulan_Ke:O", title="Bulan ke-"),
+                y=alt.Y("Omzet:Q", title="Omzet (Rp)", stack="zero", axis=alt.Axis(format="~s")),
+                color=alt.Color("Produk:N", scale=skala_p, legend=alt.Legend(title=None, orient="top")),
+                tooltip=[
+                    "Produk:N",
+                    alt.Tooltip("Bulan_Ke:O", title="Bulan ke-"),
+                    alt.Tooltip("Omzet:Q", title="Omzet (Rp)", format=",.0f"),
+                ],
+            )
+            .properties(height=320)
+            .configure_view(strokeWidth=0)
+            .configure_axis(gridColor=T["border"])
+        )
+        st.altair_chart(tumpuk)
+
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown("**Porsi omzet tiap produk (%)**")
+            porsi_df = pd.DataFrame({"Produk": ringkas_p["Produk"], "Porsi": ringkas_p["Porsi omzet (%)"]})
+            st.altair_chart(
+                alt.Chart(porsi_df)
+                .mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8)
+                .encode(
+                    y=alt.Y("Produk:N", sort="-x", title=None),
+                    x=alt.X("Porsi:Q", title="Porsi (%)"),
+                    color=alt.Color("Produk:N", scale=skala_p, legend=None),
+                    tooltip=["Produk:N", alt.Tooltip("Porsi:Q", format=".1f")],
+                )
+                .properties(height=60 + 36 * len(kolom_produk))
+                .configure_view(strokeWidth=0)
+                .configure_axis(gridColor=T["border"])
+            )
+        with g2:
+            st.markdown("**Laba kotor tiap produk (Rp)**")
+            laba_df = pd.DataFrame({"Produk": ringkas_p["Produk"], "Laba": ringkas_p["Laba"]})
+            st.altair_chart(
+                alt.Chart(laba_df)
+                .mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8)
+                .encode(
+                    y=alt.Y("Produk:N", sort="-x", title=None),
+                    x=alt.X("Laba:Q", title="Laba (Rp)", axis=alt.Axis(format="~s")),
+                    color=alt.Color("Produk:N", scale=skala_p, legend=None),
+                    tooltip=["Produk:N", alt.Tooltip("Laba:Q", format=",.0f")],
+                )
+                .properties(height=60 + 36 * len(kolom_produk))
+                .configure_view(strokeWidth=0)
+                .configure_axis(gridColor=T["border"])
+            )
+
+        st.subheader(f"Prediksi {n_bulan} bulan ke depan per produk 🔮")
+        pred_tbl = ringkas_p[
+            ["Produk", "Satuan", "Prediksi unit", "Saran produksi", "Omzet depan", "Laba depan", "Omzet total pred", "Laba total pred"]
+        ].rename(
+            columns={
+                "Prediksi unit": "Prediksi bulan depan (unit)",
+                "Saran produksi": "Saran produksi (+10%)",
+                "Omzet depan": "Omzet bulan depan",
+                "Laba depan": "Laba bulan depan",
+                "Omzet total pred": f"Omzet {n_bulan} bln",
+                "Laba total pred": f"Laba {n_bulan} bln",
+            }
+        )
+        kolom_uang = ["Omzet bulan depan", "Laba bulan depan", f"Omzet {n_bulan} bln", f"Laba {n_bulan} bln"]
+        kolom_unit_p = ["Prediksi bulan depan (unit)", "Saran produksi (+10%)"]
+        baris_total = {"Produk": "TOTAL", "Satuan": "-", **{k: np.nan for k in kolom_unit_p}}
+        baris_total.update({k: float(pred_tbl[k].sum()) for k in kolom_uang})
+        pred_tampil = pd.concat([pred_tbl, pd.DataFrame([baris_total])], ignore_index=True)
+        for k in kolom_unit_p:
+            pred_tampil[k] = pred_tampil[k].map(lambda v: "-" if pd.isna(v) else unit_txt(v))
+        for k in kolom_uang:
+            pred_tampil[k] = pred_tampil[k].map(rp)
+        st.dataframe(pred_tampil, hide_index=True)
+        st.caption("Saran produksi = perkiraan terjual bulan depan ditambah 10% cadangan, dibulatkan ke atas.")
+
+        pred_omzet_panjang = pd.concat(
+            [
+                pd.DataFrame({"Bulan_Ke": bulan_pred_p, "Omzet": unit_pred[c] * float(harga_s[c]), "Produk": c})
+                for c in kolom_produk
+            ]
+        )
+        tumpuk_pred = (
+            alt.Chart(pred_omzet_panjang)
+            .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+            .encode(
+                x=alt.X("Bulan_Ke:O", title="Bulan ke-"),
+                y=alt.Y("Omzet:Q", title="Prediksi omzet (Rp)", stack="zero", axis=alt.Axis(format="~s")),
+                color=alt.Color("Produk:N", scale=skala_p, legend=alt.Legend(title=None, orient="top")),
+                tooltip=[
+                    "Produk:N",
+                    alt.Tooltip("Bulan_Ke:O", title="Bulan ke-"),
+                    alt.Tooltip("Omzet:Q", title="Prediksi omzet (Rp)", format=",.0f"),
+                ],
+            )
+            .properties(height=300)
+            .configure_view(strokeWidth=0)
+            .configure_axis(gridColor=T["border"])
+        )
+        st.altair_chart(tumpuk_pred)
+
+        with st.expander("Lihat jumlah yang diperkirakan terjual tiap bulan"):
+            detail = pd.DataFrame(
+                {
+                    "Bulan": [label_bulan(k) for k in bulan_pred_p],
+                    **{c: [unit_txt(v) for v in unit_pred[c]] for c in kolom_produk},
+                }
+            )
+            st.dataframe(detail, hide_index=True)
+
+        st.markdown(
+            f"""<div class="insight">🍰 <b>Ringkasan produk:</b> <b>{h(str(ter_unit['Produk']))}</b> omzet terbesar,
+            <b>{h(str(ter_laba['Produk']))}</b> paling menguntungkan, dan <b>{h(str(tercepat['Produk']))}</b>
+            tumbuh paling cepat ({tercepat['Tren (%)']:+.1f}% per bulan).
+            Perkiraan {n_bulan} bulan ke depan: omzet <b>{rp(float(ringkas_p['Omzet total pred'].sum()))}</b>,
+            laba kotor <b>{rp(float(ringkas_p['Laba total pred'].sum()))}</b>.</div>""",
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "⬇️ Unduh rekap & prediksi per produk (CSV)",
+            ringkas_p.round(2).to_csv(index=False).encode("utf-8"),
+            file_name="rekap_prediksi_per_produk.csv",
+            mime="text/csv",
         )
 
 # ================= TAB 3: SKENARIO & SIMULASI ===================
@@ -829,6 +1172,25 @@ with tab5:
     data_laporan = df.rename(columns={"Bulan_Ke": "Bulan ke-", "Total_Penjualan": "Total Penjualan"}).copy()
     data_laporan["Total Penjualan"] = data_laporan["Total Penjualan"].map(rp)
     paragraf = "".join(f"<p>{h(p)}</p>" for p in kesimpulan.split("\n\n"))
+    produk_html = ""
+    if ringkas_p is not None:
+        rekap_h = ringkas_p[["Produk", "Satuan", "Harga jual", "Unit terjual", "Omzet", "Laba"]].copy()
+        rekap_h["Harga jual"] = rekap_h["Harga jual"].map(rp)
+        rekap_h["Unit terjual"] = rekap_h["Unit terjual"].map(unit_txt)
+        rekap_h["Omzet"] = rekap_h["Omzet"].map(rp)
+        rekap_h["Laba"] = rekap_h["Laba"].map(rp)
+        pred_h = ringkas_p[["Produk", "Prediksi unit", "Saran produksi", "Omzet depan", "Laba depan"]].copy()
+        pred_h = pred_h.rename(
+            columns={"Prediksi unit": "Prediksi unit bulan depan", "Omzet depan": "Omzet bulan depan", "Laba depan": "Laba bulan depan"}
+        )
+        pred_h["Prediksi unit bulan depan"] = pred_h["Prediksi unit bulan depan"].map(unit_txt)
+        pred_h["Saran produksi"] = pred_h["Saran produksi"].map(unit_txt)
+        pred_h["Omzet bulan depan"] = pred_h["Omzet bulan depan"].map(rp)
+        pred_h["Laba bulan depan"] = pred_h["Laba bulan depan"].map(rp)
+        produk_html = (
+            "<h2>Rincian per produk</h2>" + rekap_h.to_html(index=False, border=0)
+            + "<p><b>Prediksi bulan depan per produk</b></p>" + pred_h.to_html(index=False, border=0)
+        )
     html_laporan = (
         "<!DOCTYPE html><html lang='id'><head><meta charset='utf-8'>"
         "<title>Laporan Prediksi Penjualan</title><style>" + GAYA + "</style></head><body>"
@@ -839,7 +1201,7 @@ with tab5:
         + rp(abs(kenaikan)) + " x Bulan ke-</div>"
         + f"<p>R² = {r2:.3f} &nbsp;|&nbsp; MAE = {rp(mae)} &nbsp;|&nbsp; RMSE = {rp(rmse)} &nbsp;|&nbsp; MAPE = {mape:.1f}%</p>"
         + "<h2>3. Hasil prediksi</h2>" + lengkap_tampil.to_html(index=False, border=0)
-        + "<h2>4. Kesimpulan</h2>" + paragraf
+        + produk_html + "<h2>4. Kesimpulan</h2>" + paragraf
         + "<p class='kecil'>Tip: buka file ini di browser, tekan Ctrl+P, lalu pilih 'Simpan sebagai PDF'.</p>"
         "</body></html>"
     )
